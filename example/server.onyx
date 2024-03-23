@@ -1,0 +1,23 @@
+//+optional-semicolons
+
+#load "./../module"
+#load "./lib/packages.onyx"
+
+use websockets { ws :: package }
+use http.server { http :: package }
+
+handler :: (conn: &ws.Conn) {
+
+}
+
+main :: () {
+    //ws_server := ws.server(handler)
+    //ws_server->start()
+
+    //router := http.router()
+    //router->get("/chat", &ws_server)
+
+    //tcp := http.tcp(&router)
+    //tcp->serve(8080)
+}
+

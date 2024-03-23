@@ -1,0 +1,11 @@
+//+optional-semicolons
+
+package websockets
+
+use core {Result}
+
+connect :: (uri: str) -> Result(Conn, ConnError) {
+    
+    return .{ Err = .NotImplemented }
+}
+

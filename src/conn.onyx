@@ -1,0 +1,63 @@
+//+optional-semicolons
+
+package websockets
+
+use core.io
+use core {Result}
+use core.sync
+
+Conn :: struct {
+    stream: &io.Stream
+
+    type: ConnType
+    mutex: sync.Mutex
+}
+
+ConnType :: enum {
+    Server :: 1
+    Client :: 2
+}
+
+ConnError :: enum {
+    None
+    NotImplemented
+}
+
+Conn.close :: (conn: &Conn) -> ConnError {
+
+    return .None
+}
+
+Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
+
+    return .None
+}
+
+Conn.recv :: (conn: &Conn) -> Result([] u8, ConnError) {
+
+    return .{ Ok = .[] }
+}
+
+#local
+FrameHeader :: struct {
+    fin: bool
+    opcode: FrameOpcode
+    payload_length: u64
+    masking_key: ? [4] u8
+}
+
+#local
+FrameOpcode :: enum {
+    Continuation :: 0
+    Text         :: 1
+    Binary       :: 2
+    Connection   :: 8
+    Ping         :: 9
+    Pong         :: 10
+}
+
+#local
+read_frame_header :: (s: &io.Stream) -> FrameHeader {
+    return .{};
+}
+
