@@ -5,6 +5,7 @@ package websockets
 use core.io
 use core {Result}
 use core.sync
+use core.slice
 
 Conn :: struct {
     stream: &io.Stream
@@ -57,7 +58,45 @@ FrameOpcode :: enum {
 }
 
 #local
-read_frame_header :: (s: &io.Stream) -> FrameHeader {
-    return .{};
+read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
+    header: FrameHeader
+
+    data: [8] u8
+    err, data_len := io.stream_read_until_full(s, data[0 .. 2])
+    if err != .None || data_len == 0 do return .None
+
+    header.fin    =   (data[0] & 0x80) != 0
+    header.opcode = ~~(data[0] & 0x0F)
+
+    has_mask             :=   (data[1] & 0x80) != 0
+    header.payload_length = ~~(data[1] & 0x7F)
+
+    if header.payload_length == 126 {
+        err, data_len := io.stream_read_until_full(s, data[0 .. 2])
+        if err != .None || data_len == 0 do return .None
+
+        slice.reverse(data[0 .. 2])
+
+        header.payload_length = ~~ *cast(&u16) data
+    }
+    elseif header.payload_length == 127 {
+        err, data_len := io.stream_read_until_full(s, data)
+        if err != .None || data_len == 0 do return .None
+
+        slice.reverse(data)
+
+        header.payload_length = ~~ *cast(&u64) data
+    }
+
+    if has_mask {
+        err, data_len := io.stream_read_until_full(s, data[0 .. 4])
+        if err != .None || data_len == 0 do return .None
+
+        header.masking_key = *cast(&[4] u8) data
+    }
+
+    return header
 }
+
+
 
