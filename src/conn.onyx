@@ -27,6 +27,7 @@ ConnType :: enum {
 ConnError :: enum {
     None
     BadProtocol
+    ConnectionClosed
     NotImplemented
 }
 
@@ -39,7 +40,8 @@ Conn.make_from_stream :: (stream: &io.Stream, type: ConnType) -> (conn: Conn) {
 }
 
 Conn.close :: (conn: &Conn) -> ConnError {
-
+    io.stream_close(conn.stream)
+    conn.open = false
     return .None
 }
 
@@ -49,37 +51,23 @@ Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
 }
 
 Conn.recv :: (conn: &Conn) -> Result([] u8, ConnError) {
+    if !conn.open do return .{ Err = .ConnectionClosed }
+
     consumer := FrameConsumer.{
         conn,
         make([..] u8)
     }
 
     consumer->consume_all_frames()
+    // TODO: Handle ping
+    // TODO: Handle pong
 
     if consumer.should_close {
         conn->close()
-        return .{ Err = .BadProtocol }
+        return .{ Err = .ConnectionClosed }
     }
 
     return .{ Ok = consumer.buf }
-}
-
-#local
-FrameHeader :: struct {
-    fin: bool
-    opcode: FrameOpcode
-    payload_length: u64
-    masking_key: ? [4] u8
-}
-
-#local
-FrameOpcode :: enum {
-    Continuation :: 0
-    Text         :: 1
-    Binary       :: 2
-    Close        :: 8
-    Ping         :: 9
-    Pong         :: 10
 }
 
 #local
@@ -96,7 +84,13 @@ FrameConsumer :: struct {
 
 FrameConsumer.consume_all_frames :: (self: &#Self) {
     while true {
-        header := read_frame_header(self.conn.stream)?
+        maybe_header := read_frame_header(self.conn.stream)
+        if !maybe_header {
+            self.should_close = true
+            return
+        }
+
+        header := maybe_header?
 
         if header.opcode == .Ping do self.ping_encountered = true
         if header.opcode == .Pong do self.pong_encountered = true
@@ -134,12 +128,29 @@ FrameConsumer.consume_all_frames :: (self: &#Self) {
 }
 
 #local
+FrameHeader :: struct {
+    fin: bool
+    opcode: FrameOpcode
+    payload_length: u64
+    masking_key: ? [4] u8
+}
+
+#local
+FrameOpcode :: enum {
+    Continuation :: 0
+    Text         :: 1
+    Binary       :: 2
+    Close        :: 8
+    Ping         :: 9
+    Pong         :: 10
+}
+
+#local
 read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
     header: FrameHeader
 
     data: [8] u8
     err, data_len := io.stream_read_until_full(s, data[0 .. 2])
-    logf(.Info, "err: {}", err)
     if err != .None || data_len == 0 do return .None
 
     header.fin    =   (data[0] & 0x80) != 0

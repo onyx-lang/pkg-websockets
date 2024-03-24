@@ -13,10 +13,12 @@ use core {tprintf}
 
     Server :: struct {
         handler: (&Conn) -> void
+        allocator: Allocator
     }
 
-    server :: (handler: (&Conn) -> void) -> (s: Server) {
+    server :: (handler: (&Conn) -> void, allocator := context.allocator) -> (s: Server) {
         s.handler = handler
+        s.allocator = allocator
         return
     }
 
@@ -50,8 +52,8 @@ use core {tprintf}
         res->status(101)
         res->end()
 
-        socket := alloc.heap_allocator->move(req.client->detach())
-        conn   := alloc.heap_allocator->move(Conn.make_from_stream(socket, .Server))
+        socket := s.allocator->move(req.client->detach())
+        conn   := s.allocator->move(Conn.make_from_stream(socket, .Server))
 
         s.handler(conn)
     }

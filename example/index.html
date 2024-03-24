@@ -9,7 +9,11 @@
             const sock = new WebSocket("ws://localhost:8080/chat")
 
             sock.onopen = (event) => {
-                sock.send("TEST")
+                let i = 0
+                setInterval(() => {
+                    i += 1
+                    sock.send("TEST " + i)
+                }, 2000)
             }
         </script>
     </head>

@@ -9,11 +9,16 @@ use core.thread
 use core.os
 
 conn_manager :: (conn: &ws.Conn) {
-    os.sleep(100)
-    logf(.Info, "CON: {*p}", conn)
-    logf(.Info, "COS: {*p}", conn.stream)
-    logf(.Info, "CSV: {*p}", conn.stream.vtable)
-    logf(.Info, "MSG: {}", conn->recv())
+    while conn.open {
+        maybe_msg := conn->recv().Ok
+        if !maybe_msg {
+            break
+        }
+
+        msg := maybe_msg->unwrap()
+
+        logf(.Info, "MSG: {}", msg)
+    }
 }
 
 handler :: (conn: &ws.Conn) {
