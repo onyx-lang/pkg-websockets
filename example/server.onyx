@@ -3,21 +3,31 @@
 #load "./../module"
 #load "./lib/packages.onyx"
 
-use websockets { ws :: package }
-use http.server { http :: package }
+use websockets { ws :: package } use http.server { http :: package }
+use core.net
 
 handler :: (conn: &ws.Conn) {
-
+    logf(.Info, "Conn: {*}", conn);
 }
 
 main :: () {
-    //ws_server := ws.server(handler)
-    //ws_server->start()
+    ws_server := ws.server(handler)
 
-    //router := http.router()
-    //router->get("/chat", &ws_server)
+    router := http.router()
+    router->route(.GET, "/chat", &ws_server)
+    router->get("/", (req, res) => {
+        res->html(#file_contents "./index.html")
+        res->status(200)
+        res->end()
+    })
 
-    //tcp := http.tcp(&router)
-    //tcp->serve(8080)
+    logger := http.logger(style=.V2)
+
+    app := http.pipeline()
+    app->pipe(&router)
+    app->pipe(&logger)
+
+    tcp := http.tcp(&app)
+    tcp->serve(8080)
 }
 

@@ -6,12 +6,17 @@ use core.io
 use core {Result}
 use core.sync
 use core.slice
+use core.array
 
 Conn :: struct {
     stream: &io.Stream
 
+    open: bool
+
     type: ConnType
     mutex: sync.Mutex
+
+    last_checkin: u64
 }
 
 ConnType :: enum {
@@ -21,7 +26,16 @@ ConnType :: enum {
 
 ConnError :: enum {
     None
+    BadProtocol
     NotImplemented
+}
+
+Conn.make_from_stream :: (stream: &io.Stream, type: ConnType) -> (conn: Conn) {
+    conn.stream = stream
+    conn.open = true
+    conn.type = type
+    sync.mutex_init(&conn.mutex)
+    return
 }
 
 Conn.close :: (conn: &Conn) -> ConnError {
@@ -35,8 +49,19 @@ Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
 }
 
 Conn.recv :: (conn: &Conn) -> Result([] u8, ConnError) {
+    consumer := FrameConsumer.{
+        conn,
+        make([..] u8)
+    }
 
-    return .{ Ok = .[] }
+    consumer->consume_all_frames()
+
+    if consumer.should_close {
+        conn->close()
+        return .{ Err = .BadProtocol }
+    }
+
+    return .{ Ok = consumer.buf }
 }
 
 #local
@@ -52,9 +77,60 @@ FrameOpcode :: enum {
     Continuation :: 0
     Text         :: 1
     Binary       :: 2
-    Connection   :: 8
+    Close        :: 8
     Ping         :: 9
     Pong         :: 10
+}
+
+#local
+FrameConsumer :: struct {
+    conn: &Conn
+
+    buf: [..] u8
+
+    ping_encountered := false
+    pong_encountered := false
+
+    should_close := false
+}
+
+FrameConsumer.consume_all_frames :: (self: &#Self) {
+    while true {
+        header := read_frame_header(self.conn.stream)?
+
+        if header.opcode == .Ping do self.ping_encountered = true
+        if header.opcode == .Pong do self.pong_encountered = true
+
+        if header.opcode == .Text ||
+           header.opcode == .Binary ||
+           header.opcode == .Continuation
+        {
+            use new_data := make([] u8, ~~header.payload_length)
+
+            err, _ := io.stream_read_until_full(self.conn.stream, new_data)
+            if err != .None do return
+
+            header.masking_key->with([key] {
+                // Connections living on the server (from the client)
+                // should not have a masking key, and if they do,
+                // the connection must be closed.
+                if self.conn.type != .Server {
+                    self.should_close = true
+                }
+
+                apply_mask(new_data, key)
+            })
+
+            array.concat(&self.buf, new_data)
+
+            if header.fin do break
+        }
+
+        if header.opcode == .Close {
+            // TODO: Handle the socket close case
+            self.should_close = true
+        }
+    }
 }
 
 #local
@@ -99,4 +175,10 @@ read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
 }
 
 
+#local
+apply_mask :: (data: [] u8, key: [4] u8) {
+    for &d, index in data {
+        *d = *d ^ key[index % 4]
+    }
+}
 

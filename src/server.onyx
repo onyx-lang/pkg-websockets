@@ -1,0 +1,75 @@
+//+optional-semicolons
+
+package websockets
+
+use core.hash.sha1
+use core.encoding.base64
+use core.net
+use core.alloc
+use core {tprintf}
+
+#if #defined(package http.server) {
+    use http.server {Pipeable, Pipe, Request, Response}
+
+    Server :: struct {
+        handler: (&Conn) -> void
+    }
+
+    server :: (handler: (&Conn) -> void) -> (s: Server) {
+        s.handler = handler
+        return
+    }
+
+
+    #local
+    connection_handler :: (s: &Server, req: &Request, res: &Response) {
+        if req.headers["connection"] ?? "" != "Upgrade" {
+            res->status(400)
+            return
+        }
+
+        key := req.headers["sec-websocket-key"] ?? [] {
+            res->status(400)
+            return return
+        }
+
+        version := req.headers["sec-websocket-version"] ?? [] {
+            res->status(400)
+            return return
+        }
+
+        protocols  := req.headers["sec-websocket-protocol"] ?? ""
+        extensions := req.headers["sec-websocket-extensions"] ?? ""
+
+        res.headers["Upgrade"] = "websocket"
+        res.headers["Connection"] = "Upgrade"
+        res.headers["Sec-Websocket-Accept"] = compute_accept_key(key)
+        // res.headers["Sec-Websocket-Extensions"] = "" // todo: add extensions
+        // res.headers["Sec-Websocket-Protocol"] = ""   // todo: add other protocols
+
+        res->status(101)
+        res->end()
+
+        socket := req.client->detach() |> alloc.on_heap()
+        conn   := Conn.make_from_stream(null, .Server) |> alloc.on_heap()
+
+        s.handler(conn)
+    }
+
+    #local
+    compute_accept_key :: (s: str) -> str {
+        combined := tprintf("{}258EAFA5-E914-47DA-95CA-C5AB0DC85B11", s)
+        sha1hash := sha1.hash(combined)
+        return base64.encode(sha1hash)
+    }
+
+    #overload
+    Pipeable.as_pipe :: (s: &Server) -> Pipe {
+        return .{
+            connection_handler,
+            s
+        }
+    }
+}
+
+
