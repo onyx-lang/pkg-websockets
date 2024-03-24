@@ -50,8 +50,8 @@ use core {tprintf}
         res->status(101)
         res->end()
 
-        socket := req.client->detach() |> alloc.on_heap()
-        conn   := Conn.make_from_stream(null, .Server) |> alloc.on_heap()
+        socket := alloc.heap_allocator->move(req.client->detach())
+        conn   := alloc.heap_allocator->move(Conn.make_from_stream(socket, .Server))
 
         s.handler(conn)
     }

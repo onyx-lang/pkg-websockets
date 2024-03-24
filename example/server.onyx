@@ -5,9 +5,20 @@
 
 use websockets { ws :: package } use http.server { http :: package }
 use core.net
+use core.thread
+use core.os
+
+conn_manager :: (conn: &ws.Conn) {
+    os.sleep(100)
+    logf(.Info, "CON: {*p}", conn)
+    logf(.Info, "COS: {*p}", conn.stream)
+    logf(.Info, "CSV: {*p}", conn.stream.vtable)
+    logf(.Info, "MSG: {}", conn->recv())
+}
 
 handler :: (conn: &ws.Conn) {
-    logf(.Info, "Conn: {*}", conn);
+    t: thread.Thread
+    thread.spawn(&t, conn, conn_manager)
 }
 
 main :: () {

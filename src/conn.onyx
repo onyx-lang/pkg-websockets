@@ -139,6 +139,7 @@ read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
 
     data: [8] u8
     err, data_len := io.stream_read_until_full(s, data[0 .. 2])
+    logf(.Info, "err: {}", err)
     if err != .None || data_len == 0 do return .None
 
     header.fin    =   (data[0] & 0x80) != 0
