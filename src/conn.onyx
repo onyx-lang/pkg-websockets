@@ -12,6 +12,7 @@ use core.os
 
 Conn :: struct {
     stream: &io.Stream
+    stream_allocator: Allocator
 
     open: bool
 
@@ -37,7 +38,10 @@ ConnError :: enum {
     None
     BadProtocol
     ConnectionClosed
+    ConnectionFailed
+    BadParameter
     NotImplemented
+    InternalError
 }
 
 Conn.make_from_stream :: (stream: &io.Stream, type: ConnType) -> (conn: Conn) {
@@ -53,6 +57,12 @@ Conn.close :: (conn: &Conn) -> ConnError {
     io.stream_close(conn.stream)
     conn.open = false
     return .None
+}
+
+Conn.destroy :: (conn: &Conn) {
+    conn->close()
+    conn.stream_allocator->free(conn.stream)
+    conn.stream_allocator->free(conn)
 }
 
 Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {

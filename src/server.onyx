@@ -54,17 +54,9 @@ use core {tprintf}
 
         socket := s.allocator->move(req.client->detach())
         conn   := s.allocator->move(Conn.make_from_stream(socket, .Server))
+        conn.stream_allocator = s.allocator
 
         s.handler(conn)
-    }
-
-    #local
-    compute_accept_key :: (s: str) -> str {
-        hasher := sha1.Hasher.make()
-        hasher->update(s)
-        hasher->update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
-        sha1hash := hasher->final()
-        return base64.encode(sha1hash)
     }
 
     #overload
@@ -76,4 +68,12 @@ use core {tprintf}
     }
 }
 
+#package
+compute_accept_key :: (s: str) -> str {
+    hasher := sha1.Hasher.make()
+    hasher->update(s)
+    hasher->update("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+    sha1hash := hasher->final()
+    return base64.encode(sha1hash)
+}
 

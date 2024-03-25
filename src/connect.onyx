@@ -3,9 +3,162 @@
 package websockets
 
 use core {Result}
+use core.string
+use core.encoding.base64
+use core.random
+use core.conv
+use core.net
+use core.io
 
-connect :: (uri: str) -> Result(Conn, ConnError) {
-    
-    return .{ Err = .NotImplemented }
+ConnectResult :: Result(&Conn, ConnError)
+
+connect :: (uri: str, protocol: str, origin: str) -> ConnectResult {
+    url := destructure_url(uri)->or_return(ConnectResult.{ Err = ConnError.BadParameter })
+
+    socket := net.socket_create(.Inet, .Stream, .IP)->transform_err(_ => ConnError.InternalError)?
+
+    addr := net.SocketAddress.{
+        HostPort = .{ url.host, ~~url.port }
+    }
+
+    if err := socket->connect(&addr); err != .None {
+        return .{ Err = .ConnectionFailed }
+    }
+
+    accept_key: str
+    if !try_socket_upgrade(&socket, url, protocol, origin, &accept_key) {
+        return .{ Err = .ConnectionFailed }
+    }
+
+    if !read_and_check_acknowledgement(&socket, accept_key) {
+        return .{ Err = .ConnectionFailed }
+    }
+
+    conn := context.allocator->move(
+        Conn.make_from_stream(
+            context.allocator->move(socket),
+            .Client
+        )
+    )
+    conn.stream_allocator = context.allocator
+
+    return .{ Ok = conn }
 }
 
+#local
+try_socket_upgrade :: (s: &net.Socket, url: Url, protocol: str, origin: str, key: &str) -> bool {
+    use msg := make(dyn_str)
+    conv.format(&msg, "GET {} HTTP/1.1\r\n", url.resource)
+    conv.format(&msg, "Host: {}\r\n", url.host)
+    conv.format(&msg, "Upgrade: websocket\r\n")
+    conv.format(&msg, "Connection: Upgrade\r\n")
+
+    *key = random.string(16) |> base64.encode()
+    conv.format(&msg, "Sec-WebSocket-Key: {}\r\n", *key)
+    conv.format(&msg, "Sec-WebSocket-Version: 13\r\n")
+
+    if protocol do conv.format(&msg, "Sec-WebSocket-Protocl: {}\r\n", protocol)
+    if origin   do conv.format(&msg, "Origin: {}\r\n", origin)
+    
+    conv.format(&msg, "\r\n")
+
+    sent := net.socket_send(s, msg)
+    return sent == msg.count
+}
+
+#local
+read_and_check_acknowledgement :: (s: &net.Socket, key: str) -> bool {
+    use r := io.Reader.make(s)
+
+    use response_line := r->read_line(consume_newline=true)
+    if response_line != "HTTP/1.1 101 Switching Protocols\r\n" do return false
+
+    found_upgrade := false
+    found_connection := false
+    found_accept := false
+
+    while true {
+        use line := r->read_line(consume_newline=true)
+        if line == "\r\n" do break
+
+        header, value := string.bisect(line, ": ")
+        string.to_lowercase(header)
+        value = string.strip_whitespace(value)
+
+        switch header {
+            case "upgrade" do if value == "websocket" {
+                found_upgrade = true
+            }
+
+            case "connection" do if value == "Upgrade" {
+                found_connection = true
+            }
+
+            case "sec-websocket-accept" do if value == compute_accept_key(key) {
+                found_accept = true
+            }
+        }
+    }
+
+    return found_accept && found_upgrade && found_connection
+}
+
+
+#local
+Url :: struct {
+    protocol: Protocol;
+    host: str;
+    port: u32;
+    resource: str;
+    rawQuery: str;
+}
+
+#local
+Protocol :: enum {
+    Unknown;
+    Ws;
+    Wss;
+}
+
+#local
+destructure_url :: (url: str) -> ?Url {
+    protocol := Protocol.Unknown;
+    host := "";
+    port := 80;
+    resource := "/";
+
+    u := url;
+    u~, query := string.bisect(u, '?');
+
+    if string.contains(u, "://") {
+        switch v := string.read_until(&u, ':'); v {
+            case "ws" {
+                // Assuming HTTP/1.1 when using 'http' protocol
+                protocol = .Ws;
+            }
+            
+            case "wss" {
+                protocol = .Wss;
+                port = 443;
+            }
+        }
+
+        string.advance(&u, 3);
+    }
+
+    host_and_port := string.read_until(&u, '/');
+    if string.contains(host_and_port, '@') {
+        // Currently, basic authentication in URL is not allowed.
+        // I.e.  http://user:pass@host:port/
+        return .{};
+    }
+
+    host~, port_str := string.bisect(host_and_port, ':');
+    if port_str {
+        port = ~~ conv.parse_int(port_str);
+    }
+
+    if u do resource = u;
+
+    return Url.{ protocol, host, port, resource, query };
+}

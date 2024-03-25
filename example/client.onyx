@@ -1,0 +1,25 @@
+//+optional-semicolons
+
+#load "./../module"
+#load "./lib/packages.onyx"
+
+use websockets { ws :: package }
+use http.server { http :: package }
+use core.net
+use core.thread
+use core.os
+use core.alloc
+use core {println}
+
+main :: () {
+    res_conn := ws.connect("ws://127.0.0.1:10000/", "", "")
+    conn := res_conn.Ok?
+
+    conn->recv() |> println()
+
+    while true {
+        conn->send("This is a test")
+        conn->recv() |> println()
+    }
+}
+

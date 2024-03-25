@@ -3,21 +3,29 @@
 #load "./../module"
 #load "./lib/packages.onyx"
 
-use websockets { ws :: package } use http.server { http :: package }
+use websockets { ws :: package }
+use http.server { http :: package }
 use core.net
 use core.thread
 use core.os
+use core.alloc
+use core {tprintf}
 
 conn_manager :: (conn: &ws.Conn) {
-    while conn.open {
+    while true {
+        alloc.clear_temp_allocator()
+
         maybe_msg := conn->recv().Ok
         if !maybe_msg {
             break
         }
 
         msg := maybe_msg->unwrap()
+        defer delete(&msg)
 
         logf(.Info, "MSG: {}", msg)
+
+        conn->send(tprintf("REPLY: {}", msg))
     }
 }
 
