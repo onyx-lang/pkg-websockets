@@ -7,6 +7,8 @@ use core {Result}
 use core.sync
 use core.slice
 use core.array
+use core.random
+use core.os
 
 Conn :: struct {
     stream: &io.Stream
@@ -14,7 +16,9 @@ Conn :: struct {
     open: bool
 
     type: ConnType
+    format: ConnFormat
     mutex: sync.Mutex
+    rand: random.Random
 
     last_checkin: u64
 }
@@ -22,6 +26,11 @@ Conn :: struct {
 ConnType :: enum {
     Server :: 1
     Client :: 2
+}
+
+ConnFormat :: enum {
+    Binary :: 1
+    Text   :: 2
 }
 
 ConnError :: enum {
@@ -35,6 +44,7 @@ Conn.make_from_stream :: (stream: &io.Stream, type: ConnType) -> (conn: Conn) {
     conn.stream = stream
     conn.open = true
     conn.type = type
+    conn.rand = random.Random.make(os.time())
     sync.mutex_init(&conn.mutex)
     return
 }
@@ -46,16 +56,38 @@ Conn.close :: (conn: &Conn) -> ConnError {
 }
 
 Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
+    if !conn.open do return .ConnectionClosed
+
+    header: FrameHeader
+    header.fin = true
+    header.payload_length = ~~data.count
+    header.opcode = .Binary if conn.format == .Binary else .Text
+
+    to_send := slice.copy(data, context.temp_allocator)
+    if conn.type == .Client {
+        key: [4] u8
+        for &k in key do *k = ~~conn.rand->between(0, 256)
+        header.masking_key = key
+        apply_mask(to_send, key)
+    }
+
+    if !send_frame_header(conn.stream, header) do return .ConnectionClosed
+
+    if err, wrote := io.stream_write(conn.stream, to_send);
+        err != .None || wrote != to_send.count
+    {
+        return .ConnectionClosed
+    }
 
     return .None
 }
 
-Conn.recv :: (conn: &Conn) -> Result([] u8, ConnError) {
+Conn.recv :: (conn: &Conn, allocator := context.allocator) -> Result([] u8, ConnError) {
     if !conn.open do return .{ Err = .ConnectionClosed }
 
     consumer := FrameConsumer.{
         conn,
-        make([..] u8)
+        make([..] u8, allocator)
     }
 
     consumer->consume_all_frames()
@@ -184,6 +216,52 @@ read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
     }
 
     return header
+}
+
+#local
+send_frame_header :: (s: &io.Stream, header: FrameHeader) -> bool {
+    data: [14] u8
+    data_len := 2
+
+    data[0] = cast(u8) header.opcode
+
+    if header.fin         do data[0] |= 0x80
+    if header.masking_key do data[1] |= 0x80
+
+    if header.payload_length < 126 {
+        data[1] |= ~~header.payload_length
+    }
+    elseif header.payload_length <= 65535 {
+        data[1] |= 126
+        data[2] = ~~((header.payload_length & 0xff00) >> 8)
+        data[3] = ~~((header.payload_length & 0x00ff) >> 0)
+        data_len += 2
+    }
+    else {
+        data[1] |= 127
+        data[2] = ~~((header.payload_length & 0xff00000000000000) >> 56)
+        data[3] = ~~((header.payload_length & 0x00ff000000000000) >> 48)
+        data[4] = ~~((header.payload_length & 0x0000ff0000000000) >> 40)
+        data[5] = ~~((header.payload_length & 0x000000ff00000000) >> 32)
+        data[6] = ~~((header.payload_length & 0x00000000ff000000) >> 24)
+        data[7] = ~~((header.payload_length & 0x0000000000ff0000) >> 16)
+        data[8] = ~~((header.payload_length & 0x000000000000ff00) >> 8)
+        data[9] = ~~((header.payload_length & 0x00000000000000ff) >> 0)
+        data_len += 8
+    }
+
+    header.masking_key->with([key] {
+        data[data_len + 0] = key[0]
+        data[data_len + 1] = key[1]
+        data[data_len + 2] = key[2]
+        data[data_len + 3] = key[3]
+        data_len += 4
+    })
+
+    err, wrote := io.stream_write(s, data[0 .. data_len])
+    if err != .None || wrote != data_len do return false
+    
+    return true
 }
 
 
