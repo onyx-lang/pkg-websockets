@@ -107,7 +107,7 @@ read_and_check_acknowledgement :: (s: &io.Stream, key: str) -> bool {
                 found_upgrade = true
             }
 
-            case "connection" do if value == "Upgrade" {
+            case "connection" do if string.to_lowercase(value) == "upgrade" {
                 found_connection = true
             }
 
