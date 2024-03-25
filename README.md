@@ -8,21 +8,21 @@ When inside your Onyx project, simply run these commands:
 
 ```sh
 onyx add websockets
-onys sync
+onyx sync
 ```
 
 If you are writing a WebSocket *server*, you need to install the `http-server` package as well.
 
 ```sh
 onyx add http-server
-onys sync
+onyx sync
 ```
 
 If you are writing a WebSocket *client* with `wss://` connections, you need to install the `openssl` package as well.
 
 ```sh
 onyx add openssl
-onys sync
+onyx sync
 ```
 
 ## Usage
