@@ -27,5 +27,5 @@ onys sync
 
 ## Usage
 
-See the [examples](https://github.com/onyx-lang/pkg-websockets/tree/main/examples) folder for simple examples of using this package as a client or on a server.
+See the [example](https://github.com/onyx-lang/pkg-websockets/tree/main/example) folder for simple examples of using this package as a client or on a server.
 
