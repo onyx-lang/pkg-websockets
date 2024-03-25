@@ -12,7 +12,7 @@ use core.alloc
 use core {println}
 
 main :: () {
-    res_conn := ws.connect("ws://127.0.0.1:10000/", "", "")
+    res_conn := ws.connect("wss://echo.websocket.org/", "", "echo.websocket.org")
     conn := res_conn.Ok?
 
     conn->recv() |> println()

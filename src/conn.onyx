@@ -112,6 +112,12 @@ Conn.recv :: (conn: &Conn, allocator := context.allocator) -> Result([] u8, Conn
     return .{ Ok = consumer.buf }
 }
 
+// Returns true if there are bytes to be read.
+Conn.poll :: (conn: &Conn) -> bool {
+    _, state := io.stream_poll(conn.stream, .Read, 0)
+    return state
+}
+
 #local
 FrameConsumer :: struct {
     conn: &Conn

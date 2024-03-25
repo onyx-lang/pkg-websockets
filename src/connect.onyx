@@ -2,7 +2,7 @@
 
 package websockets
 
-use core {Result}
+use core {Result, tprintf}
 use core.string
 use core.encoding.base64
 use core.random
@@ -15,28 +15,39 @@ ConnectResult :: Result(&Conn, ConnError)
 connect :: (uri: str, protocol: str, origin: str) -> ConnectResult {
     url := destructure_url(uri)->or_return(ConnectResult.{ Err = ConnError.BadParameter })
 
-    socket := net.socket_create(.Inet, .Stream, .IP)->transform_err(_ => ConnError.InternalError)?
-
-    addr := net.SocketAddress.{
-        HostPort = .{ url.host, ~~url.port }
+    use dns_results := net.resolve(url.host, ~~url.port, 5);
+    dns_result := Slice.find_opt(dns_results, [x](x.type == .Stream)) ?? [] {
+        return return .{ Err = .ConnectionFailed }
     }
 
-    if err := socket->connect(&addr); err != .None {
+    socket := net.socket_create(dns_result.family, dns_result.type, dns_result.proto)->transform_err(_ => ConnError.InternalError)?
+
+    if err := socket->connect(&dns_result.addr); err != .None {
         return .{ Err = .ConnectionFailed }
+    }
+
+    stream: & io.Stream
+
+    if url.protocol == .Wss {
+        if !try_ssl_connect(&stream, socket, url.host) {
+            return .{ Err = .ConnectionFailed }
+        }
+    } else {
+        stream = context.allocator->move(socket)
     }
 
     accept_key: str
-    if !try_socket_upgrade(&socket, url, protocol, origin, &accept_key) {
+    if !try_socket_upgrade(stream, url, protocol, origin, &accept_key) {
         return .{ Err = .ConnectionFailed }
     }
 
-    if !read_and_check_acknowledgement(&socket, accept_key) {
+    if !read_and_check_acknowledgement(stream, accept_key) {
         return .{ Err = .ConnectionFailed }
     }
 
     conn := context.allocator->move(
         Conn.make_from_stream(
-            context.allocator->move(socket),
+            stream,
             .Client
         )
     )
@@ -46,7 +57,7 @@ connect :: (uri: str, protocol: str, origin: str) -> ConnectResult {
 }
 
 #local
-try_socket_upgrade :: (s: &net.Socket, url: Url, protocol: str, origin: str, key: &str) -> bool {
+try_socket_upgrade :: (s: &io.Stream, url: Url, protocol: str, origin: str, key: &str) -> bool {
     use msg := make(dyn_str)
     conv.format(&msg, "GET {} HTTP/1.1\r\n", url.resource)
     conv.format(&msg, "Host: {}\r\n", url.host)
@@ -62,12 +73,12 @@ try_socket_upgrade :: (s: &net.Socket, url: Url, protocol: str, origin: str, key
     
     conv.format(&msg, "\r\n")
 
-    sent := net.socket_send(s, msg)
-    return sent == msg.count
+    err, sent := io.stream_write(s, msg)
+    return err == .None && sent == msg.count
 }
 
 #local
-read_and_check_acknowledgement :: (s: &net.Socket, key: str) -> bool {
+read_and_check_acknowledgement :: (s: &io.Stream, key: str) -> bool {
     use r := io.Reader.make(s)
 
     use response_line := r->read_line(consume_newline=true)
@@ -133,7 +144,6 @@ destructure_url :: (url: str) -> ?Url {
     if string.contains(u, "://") {
         switch v := string.read_until(&u, ':'); v {
             case "ws" {
-                // Assuming HTTP/1.1 when using 'http' protocol
                 protocol = .Ws;
             }
             
@@ -149,7 +159,6 @@ destructure_url :: (url: str) -> ?Url {
     host_and_port := string.read_until(&u, '/');
     if string.contains(host_and_port, '@') {
         // Currently, basic authentication in URL is not allowed.
-        // I.e.  http://user:pass@host:port/
         return .{};
     }
 
@@ -161,4 +170,97 @@ destructure_url :: (url: str) -> ?Url {
     if u do resource = u;
 
     return Url.{ protocol, host, port, resource, query };
+}
+
+#if #defined(package openssl) {
+    use openssl {*}
+
+    #local
+    try_ssl_connect :: (stream: & &io.Stream, sock: net.Socket, host: str) -> bool {
+        ssl_ctx := SSL_CTX_new(TLS_client_method())
+        if cast(u64, ssl_ctx) == 0 {
+            return false
+        }
+        
+        SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, null);
+        SSL_CTX_set_verify_depth(ssl_ctx, 4);
+        SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_COMPRESSION | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);
+        SSL_CTX_set_default_verify_paths(ssl_ctx);
+
+        ssl := try(SSL_new(ssl_ctx))
+        bio := try(BIO_new_socket(~~sock.handle, BIO_NOCLOSE))
+        SSL_set_bio(ssl, bio, bio)
+
+        try(SSL_ctrl(
+            ssl,
+            SSL_CTRL_SET_TLSEXT_HOSTNAME,
+            ~~ TLSEXT_NAMETYPE_host_name,
+            tprintf("{}\0", host).data
+        ))
+
+        res := SSL_connect(ssl)
+        if res <= 0 do return false
+
+        *stream = context.allocator->move(SSL_Context.{
+            base = .{
+                &SSL_Context._vtable,
+                .Block_On_Read
+            },
+            ctx = ssl_ctx,
+            ssl = ssl,
+        })
+
+        return true
+
+        try :: macro (v: $T) -> T {
+            res := v
+            if cast(u64, res) == 0 do return return false
+            return res
+        }
+    }
+
+    #local
+    SSL_Context :: struct {
+        use base: io.Stream
+
+        ctx: SSL_CTX
+        ssl: SSL
+    }
+
+    SSL_Context._vtable := io.Stream_Vtable.{
+        read = (s: &SSL_Context, buffer: [] u8) -> (io.Error, u32) {
+            bytes_read := SSL_read(s.ssl, buffer.data, buffer.count)
+            if bytes_read <= 0 do return .EOF, 0
+
+            return .None, bytes_read
+        },
+
+        write = (s: &SSL_Context, buffer: [] u8) -> (io.Error, u32) {
+            bytes_wrote := SSL_write(s.ssl, buffer.data, buffer.count)
+            if bytes_wrote <= 0 do return .EOF, 0
+
+            return .None, bytes_wrote
+        },
+
+        poll = (s: &SSL_Context, state: io.PollEvent, timeout: i32) -> (io.Error, bool) {
+            if state != .Read do return .None, true
+
+            if timeout > 0 {
+                logf(.Warning, "`timeout` parameter is currently not respected when using an SSL connection.")
+            }
+
+            return .None, SSL_pending(s.ssl) > 0
+        },
+
+        close = (s: &SSL_Context) -> io.Error {
+            SSL_free(s.ssl)
+            SSL_CTX_free(s.ctx)
+
+            return .None
+        }
+    };
+
+} else {
+    #local
+    try_ssl_connect :: (_1, _2, _3) => false
 }
