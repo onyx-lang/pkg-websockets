@@ -59,7 +59,13 @@ connect :: (uri: str, protocol: str, origin: str) -> ConnectResult {
 #local
 try_socket_upgrade :: (s: &io.Stream, url: Url, protocol: str, origin: str, key: &str) -> bool {
     use msg := make(dyn_str)
-    conv.format(&msg, "GET {} HTTP/1.1\r\n", url.resource)
+    conv.format(&msg, "GET {}", url.resource)
+
+    if url.rawQuery {
+        conv.format(&msg, "?{}", url.rawQuery)
+    }
+
+    conv.format(&msg, " HTTP/1.1\r\n")
     conv.format(&msg, "Host: {}\r\n", url.host)
     conv.format(&msg, "Upgrade: websocket\r\n")
     conv.format(&msg, "Connection: Upgrade\r\n")
