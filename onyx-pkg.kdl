@@ -3,7 +3,7 @@ package {
     author "Brendan Hansen" 
     url "https://github.com/onyx-lang/pkg-websockets" 
     description "A server and client implementation of the WebSocket protocol" 
-    version "0.0.1" 
+    version "0.0.2" 
 }
 
 config {
