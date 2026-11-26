@@ -1,16 +1,13 @@
-//+optional-semicolons
-
 package websockets
 
 use core {Result, tprintf}
-use core.string
 use core.encoding.base64
 use core.random
 use core.conv
 use core.net
 use core.io
 
-ConnectResult :: Result(&Conn, ConnError)
+ConnectResult :: #type Result(&Conn, ConnError)
 
 connect :: (uri: str, protocol: str, origin: str) -> ConnectResult {
     url := destructure_url(uri)->or_return(ConnectResult.{ Err = ConnError.BadParameter })
@@ -79,8 +76,12 @@ try_socket_upgrade :: (s: &io.Stream, url: Url, protocol: str, origin: str, key:
     
     conv.format(&msg, "\r\n")
 
-    err, sent := io.stream_write(s, msg)
-    return err == .None && sent == msg.count
+    switch io.Stream.write(s, msg) {
+        case .Err do return false
+        case .Ok as sent {
+            return sent == msg.count
+        }
+    }
 }
 
 #local
@@ -98,16 +99,16 @@ read_and_check_acknowledgement :: (s: &io.Stream, key: str) -> bool {
         use line := r->read_line(consume_newline=true)
         if line == "\r\n" do break
 
-        header, value := string.bisect(line, ": ")
-        string.to_lowercase(header)
-        value = string.strip_whitespace(value)
+        header, value := str.bisect(line, ": ")
+        str.to_lowercase(header)
+        value = str.strip_whitespace(value)
 
         switch header {
             case "upgrade" do if value == "websocket" {
                 found_upgrade = true
             }
 
-            case "connection" do if string.to_lowercase(value) == "upgrade" {
+            case "connection" do if str.to_lowercase(value) == "upgrade" {
                 found_connection = true
             }
 
@@ -145,10 +146,10 @@ destructure_url :: (url: str) -> ?Url {
     resource := "/";
 
     u := url;
-    u~, query := string.bisect(u, '?');
+    u~, query := str.bisect(u, '?');
 
-    if string.contains(u, "://") {
-        switch v := string.read_until(&u, ':'); v {
+    if str.contains(u, "://") {
+        switch v := str.read_until(&u, ':'); v {
             case "ws" {
                 protocol = .Ws;
             }
@@ -159,16 +160,16 @@ destructure_url :: (url: str) -> ?Url {
             }
         }
 
-        string.advance(&u, 3);
+        str.advance(&u, 3);
     }
 
-    host_and_port := string.read_until(&u, '/');
-    if string.contains(host_and_port, '@') {
+    host_and_port := str.read_until(&u, '/');
+    if str.contains(host_and_port, '@') {
         // Currently, basic authentication in URL is not allowed.
         return .{};
     }
 
-    host~, port_str := string.bisect(host_and_port, ':');
+    host~, port_str := str.bisect(host_and_port, ':');
     if port_str {
         port = ~~ conv.parse_int(port_str);
     }
@@ -187,7 +188,7 @@ destructure_url :: (url: str) -> ?Url {
         if cast(u64, ssl_ctx) == 0 {
             return false
         }
-        
+
         SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, null);
         SSL_CTX_set_verify_depth(ssl_ctx, 4);
         SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_COMPRESSION | SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION);

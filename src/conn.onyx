@@ -1,12 +1,8 @@
-//+optional-semicolons
-
 package websockets
 
 use core.io
 use core {Result}
 use core.sync
-use core.slice
-use core.array
 use core.random
 use core.os
 
@@ -54,7 +50,7 @@ Conn.make_from_stream :: (stream: &io.Stream, type: ConnType) -> (conn: Conn) {
 }
 
 Conn.close :: (conn: &Conn) -> ConnError {
-    io.stream_close(conn.stream)
+    io.Stream.close(conn.stream)
     conn.open = false
     return .None
 }
@@ -73,7 +69,7 @@ Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
     header.payload_length = ~~data.count
     header.opcode = .Binary if conn.format == .Binary else .Text
 
-    to_send := slice.copy(data, context.temp_allocator)
+    to_send := Slice.copy(data, context.temp_allocator)
     if conn.type == .Client {
         key: [4] u8
         for &k in key do *k = ~~conn.rand->between(0, 256)
@@ -83,9 +79,8 @@ Conn.send :: (conn: &Conn, data: [] u8) -> ConnError {
 
     if !send_frame_header(conn.stream, header) do return .ConnectionClosed
 
-    if err, wrote := io.stream_write(conn.stream, to_send);
-        err != .None || wrote != to_send.count
-    {
+    wrote := io.Stream.write(conn.stream, to_send).Ok ?? 0
+    if wrote != to_send.count {
         return .ConnectionClosed
     }
 
@@ -114,7 +109,7 @@ Conn.recv :: (conn: &Conn, allocator := context.allocator) -> Result([] u8, Conn
 
 // Returns true if there are bytes to be read.
 Conn.poll :: (conn: &Conn) -> bool {
-    _, state := io.stream_poll(conn.stream, .Read, 0)
+    state := io.Stream.poll(conn.stream, .Read, 0).Ok ?? false
     return state
 }
 
@@ -149,10 +144,10 @@ FrameConsumer.consume_all_frames :: (self: &#Self) {
         {
             use new_data := make([] u8, ~~header.payload_length)
 
-            err, _ := io.stream_read_until_full(self.conn.stream, new_data)
-            if err != .None do return
+            err := io.Stream.read_until_full(self.conn.stream, new_data).Err
+            if err do return
 
-            header.masking_key->with([key] {
+            if header.masking_key as key {
                 // Connections living on the server (from the client)
                 // should not have a masking key, and if they do,
                 // the connection must be closed.
@@ -161,9 +156,9 @@ FrameConsumer.consume_all_frames :: (self: &#Self) {
                 }
 
                 apply_mask(new_data, key)
-            })
+            }
 
-            array.concat(&self.buf, new_data)
+            Array.concat(&self.buf, new_data)
 
             if header.fin do break
         }
@@ -198,8 +193,8 @@ read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
     header: FrameHeader
 
     data: [8] u8
-    err, data_len := io.stream_read_until_full(s, data[0 .. 2])
-    if err != .None || data_len == 0 do return .None
+    data_len := io.Stream.read_until_full(s, data[0 .. 2]).Ok ?? 0
+    if data_len == 0 do return .None
 
     header.fin    =   (data[0] & 0x80) != 0
     header.opcode = ~~(data[0] & 0x0F)
@@ -208,25 +203,25 @@ read_frame_header :: (s: &io.Stream) -> ? FrameHeader {
     header.payload_length = ~~(data[1] & 0x7F)
 
     if header.payload_length == 126 {
-        err, data_len := io.stream_read_until_full(s, data[0 .. 2])
-        if err != .None || data_len == 0 do return .None
+        data_len := io.Stream.read_until_full(s, data[0 .. 2]).Ok ?? 0
+        if data_len == 0 do return .None
 
-        slice.reverse(data[0 .. 2])
+        Slice.reverse(data[0 .. 2])
 
         header.payload_length = ~~ *cast(&u16) data
     }
     elseif header.payload_length == 127 {
-        err, data_len := io.stream_read_until_full(s, data)
-        if err != .None || data_len == 0 do return .None
+        data_len := io.Stream.read_until_full(s, data).Ok ?? 0
+        if data_len == 0 do return .None
 
-        slice.reverse(data)
+        Slice.reverse(data)
 
         header.payload_length = ~~ *cast(&u64) data
     }
 
     if has_mask {
-        err, data_len := io.stream_read_until_full(s, data[0 .. 4])
-        if err != .None || data_len == 0 do return .None
+        data_len := io.Stream.read_until_full(s, data[0 .. 4]).Ok ?? 0
+        if data_len == 0 do return .None
 
         header.masking_key = *cast(&[4] u8) data
     }
@@ -266,16 +261,16 @@ send_frame_header :: (s: &io.Stream, header: FrameHeader) -> bool {
         data_len += 8
     }
 
-    header.masking_key->with([key] {
+    if header.masking_key as key {
         data[data_len + 0] = key[0]
         data[data_len + 1] = key[1]
         data[data_len + 2] = key[2]
         data[data_len + 3] = key[3]
         data_len += 4
-    })
+    }
 
-    err, wrote := io.stream_write(s, data[0 .. data_len])
-    if err != .None || wrote != data_len do return false
+    wrote := io.Stream.write(s, data[0 .. data_len]).Ok ?? 0
+    if wrote != data_len do return false
     
     return true
 }
